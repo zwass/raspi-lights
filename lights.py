@@ -76,12 +76,14 @@ def wheel(pos):
         pos -= 170
         return Color(0, pos * 3, 255 - pos * 3)
 
-def rainbow_strips(strips, wait_ms=20, iterations=1):
+def rainbow_strips(strips, wait_ms=20, iterations=1, showfunc=None):
     for j in range(256*iterations):
         for strip in strips:
             for i in range(strip.numPixels()):
                 strip.setPixelColor(i, wheel((i+j) & 255))
-        strips[0].show()
+        if showfunc:
+            showfunc()
+        # strips[0].show()
         time.sleep(wait_ms/1000.0)
 
 def rainbow(strip, wait_ms=20, iterations=1):
@@ -100,12 +102,14 @@ def rainbowCycle(strip, wait_ms=20, iterations=5):
         strip.show()
         time.sleep(wait_ms/1000.0)
 
-def rainbow_cycle_strips(strips, wait_ms=20, iterations=5):
+def rainbow_cycle_strips(strips, wait_ms=20, iterations=5, showfunc=None):
     """Draw rainbow that uniformly distributes itself across all pixels."""
     for j in range(256*iterations):
         for strip in strips:
             for i in range(strip.numPixels()):
                 strip.setPixelColor(i, wheel((int(i * 256 / strip.numPixels()) + j) & 255))
+        if showfunc:
+            showfunc()
         strips[0].show()
         time.sleep(wait_ms/1000.0)
 
@@ -128,6 +132,13 @@ def clear(strip: Adafruit_NeoPixel):
 
     strip.show()
 
+def clear_all(strips, showfunc):
+    for strip in strips:
+        for i in range(strip.numPixels()):
+            strip.setPixelColor(i, Color(0, 0, 0))
+    show()
+        
+
 class PixelExpander:
     def __init__(self, ser: Serial):
         self.ser = ser
@@ -147,17 +158,37 @@ class PixelExpander:
     def writeMessage(self, data: bytes):
         crc = crc32(data)
         msg = data+crc.to_bytes(4, 'little')
-        print(crc)
+        #print(crc)
         ser.write(msg)
-        print(len(msg), msg)
+        #print(len(msg), msg)
 
-    def write(self):
-        header = PixelExpander.make_frame_header(0, 1)
-        #print(header)
-        chan_header = PixelExpander.make_channel_header(2)
-        #print(chan_header)
-        self.writeMessage(header+chan_header+b'\xff\x00\x00\x2f\xff\x00\x00\x00')
+    def write_pixels(self, channel, pixeldata):
+        header = PixelExpander.make_frame_header(channel, 1)
+        chan_header = PixelExpander.make_channel_header(int(len(pixeldata) / 4))
+        self.writeMessage(header+chan_header+pixeldata)
+
+    def draw(self):
         self.writeMessage(PixelExpander.make_frame_header(0xff, 2))
+
+class ExpanderStrip:
+    def __init__(self, expander: PixelExpander, channel: int, num_pixels: int):
+        self.expander = expander
+        self.channel = channel
+        self.pixels = [Color(0, 0, 0, 0)] * num_pixels
+
+    def numPixels(self):
+        return len(self.pixels)
+    
+    def setPixelColor(self, n, color):
+        """Set LED at position n to the provided 24-bit color value (in RGB order).
+        """
+        self.pixels[n] = color
+
+    def write_pixels(self):
+        pixeldata = bytearray()
+        for pixel in self.pixels:
+            pixeldata.extend((pixel.r, pixel.g, pixel.b, pixel.w))
+        self.expander.write_pixels(self.channel, pixeldata)
 
 # Main program logic follows:
 if __name__ == '__main__':
@@ -170,10 +201,21 @@ if __name__ == '__main__':
     print(ser.name)
 
     pex = PixelExpander(ser)
-    while True: 
-        pex.write()
-        time.sleep(3.6 / 1000.0)
-        os.exit(1)
+    strip1 = ExpanderStrip(pex, 0, 150)
+    strip2 = ExpanderStrip(pex, 1, 150)
+    hoops = [ExpanderStrip(pex, chan, 150) for chan in range(16)]
+
+    for i in range(3):
+        hoops[i].setPixelColor(i, wheel(i))
+        hoops[i].write_pixels()
+    pex.draw()
+    print(len(hoops))
+    #rainbow_cycle_strips([strip1, strip2])
+
+    # while True: 
+    #     pex.write()
+    #     time.sleep(3.6 / 1000.0)
+    #     break
 
     # Create NeoPixel object with appropriate configuration.
     strip = Adafruit_NeoPixel(LED_COUNT, LED_PIN, LED_FREQ_HZ, LED_DMA, LED_INVERT, LED_BRIGHTNESS, LED_CHANNEL)
@@ -207,21 +249,27 @@ if __name__ == '__main__':
         if not args.clear:
             print('Use "-c" argument to clear LEDs on exit')
 
+        def show():
+            rings[0].show()
+            for strip in hoops:
+                strip.write_pixels()
+            pex.draw()
+
         clear(strip)
         while True:
             print('Rainbow (rings)')
-            rainbow_strips(rings)
+            rainbow_strips(rings + hoops, showfunc = show)
             #colorWipe(rings[1], wheel(1))
-            print ('Rainbow (strip)')
-            rainbow(strip)
-            print ('Rainbow cycle (strip)')
-            rainbowCycle(strip)
+            #print ('Rainbow (strip)')
+            #rainbow(strip)
+            #print ('Rainbow cycle (strip)')
+            #rainbowCycle(strip)
             print('Rainbow cycle (rings)')
-            rainbow_cycle_strips(rings)
+            rainbow_cycle_strips(rings + hoops, showfunc = show)
             # print ('Rainbow theater.')
             # theaterChaseRainbow(strip)
 
     except KeyboardInterrupt:
         #if args.clear:
-        clear(strip)
+        clear_all(rings+hoops, show)
         #colorWipe(strip, Color(0,0,0), 10)
