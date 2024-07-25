@@ -6,6 +6,7 @@
 # various animations on a strip of NeoPixels.
 
 import time
+import random
 from rpi_ws281x import Adafruit_NeoPixel, Color, RGBW
 from serial import Serial
 from zlib import crc32
@@ -17,7 +18,7 @@ LED_PIN        = 18      # GPIO pin connected to the pixels (18 uses PWM!).
 #LED_PIN        = 10      # GPIO pin connected to the pixels (10 uses SPI /dev/spidev0.0).
 LED_FREQ_HZ    = 800000  # LED signal frequency in hertz (usually 800khz)
 LED_DMA        = 10      # DMA channel to use for generating a signal (try 10)
-LED_BRIGHTNESS = 6      # Set to 0 for darkest and 255 for brightest
+LED_BRIGHTNESS = 90      # Set to 0 for darkest and 255 for brightest
 LED_INVERT     = False   # True to invert the signal (when using NPN transistor level shift)
 LED_CHANNEL    = 0       # set to '1' for GPIOs 13, 19, 41, 45 or 53
 
@@ -36,15 +37,26 @@ class Ring:
             self.strip.setPixelColor(self.offset + i, color)
 
     def setPixelColor(self, i: int, color: RGBW):
+        i = self.getOffset(i)
+        self.strip.setPixelColor(i, color)
+
+    def getOffset(self, i: int) -> int:
         if self.reverse:
-            i = self.pixel_count - i - 1
-        self.strip.setPixelColor(self.offset+i, color)
+            return self.offset + self.pixel_count - i - 1
+        else:
+            return self.offset + i
 
     def numPixels(self):
         return self.pixel_count
     
     def show(self):
         return self.strip.show()
+    
+    def darken(self, factor=.9):
+        for i in range(self.pixel_count):
+            i = self.getOffset(i)
+            color = RGBW(self.strip.getPixelColor(i))
+            self.strip.setPixelColor(i, Color(int(color.r * factor), int(color.g * factor), int(color.b * factor), int(color.w * factor)))
 
 # Define functions which animate LEDs in various ways.
 def colorWipe(strip, color, wait_ms=1):
@@ -67,6 +79,7 @@ def theaterChase(strip, color, wait_ms=50, iterations=10):
 
 def wheel(pos):
     """Generate rainbow colors across 0-255 positions."""
+    pos %= 256
     if pos < 85:
         return Color(pos * 3, 255 - pos * 3, 0)
     elif pos < 170:
@@ -76,53 +89,50 @@ def wheel(pos):
         pos -= 170
         return Color(0, pos * 3, 255 - pos * 3)
 
-def rainbow_strips(strips, wait_ms=20, iterations=1, showfunc=None):
+
+def firefly_strips(strips, show, iterations=4):
     for j in range(256*iterations):
-        for strip in strips:
+        for i, strip in enumerate(strips):
+            strip.darken(factor=.8)
+            for n in range(int(strip.numPixels() / 10) + 1):
+                idx = random.randrange(0, strip.numPixels())
+                strip.setPixelColor(idx, wheel(j + 10 * i + n * 2))
+        show()
+
+def darken_circle_strips(strips, show, iterations=4):
+    for j in range(256*iterations):
+        for i, strip in enumerate(strips):
+            strip.darken()
+            strip.setPixelColor(j % strip.numPixels(), wheel(j + 10 * i))
+        show()
+
+def rainbow_strips(strips, show, wait_ms=0, iterations=4):
+    for j in range(256*iterations):
+        for s, strip in enumerate(strips):
             for i in range(strip.numPixels()):
-                strip.setPixelColor(i, wheel((i+j) & 255))
-        if showfunc:
-            showfunc()
-        # strips[0].show()
+                strip.setPixelColor(i, wheel((i+j+10*s) & 255))
+        show()
         time.sleep(wait_ms/1000.0)
 
-def rainbow(strip, wait_ms=20, iterations=1):
-    """Draw rainbow that fades across all pixels at once."""
-    for j in range(256*iterations):
-        for i in range(strip.numPixels()):
-            strip.setPixelColor(i, wheel((i+j) & 255))
-        strip.show()
-        time.sleep(wait_ms/1000.0)
 
-def rainbowCycle(strip, wait_ms=20, iterations=5):
-    """Draw rainbow that uniformly distributes itself across all pixels."""
-    for j in range(256*iterations):
-        for i in range(strip.numPixels()):
-            strip.setPixelColor(i, wheel((int(i * 256 / strip.numPixels()) + j) & 255))
-        strip.show()
-        time.sleep(wait_ms/1000.0)
-
-def rainbow_cycle_strips(strips, wait_ms=20, iterations=5, showfunc=None):
+def rainbow_cycle_strips(strips, show, wait_ms=0, iterations=4):
     """Draw rainbow that uniformly distributes itself across all pixels."""
     for j in range(256*iterations):
         for strip in strips:
             for i in range(strip.numPixels()):
                 strip.setPixelColor(i, wheel((int(i * 256 / strip.numPixels()) + j) & 255))
-        if showfunc:
-            showfunc()
-        strips[0].show()
+        show()
         time.sleep(wait_ms/1000.0)
 
-def theaterChaseRainbow(strip, wait_ms=50):
-    """Rainbow movie theater light style chaser animation."""
-    for j in range(256):
-        for q in range(3):
-            for i in range(0, strip.numPixels(), 3):
-                strip.setPixelColor(i+q, wheel((i+j) % 255))
-            strip.show()
-            time.sleep(wait_ms/1000.0)
-            for i in range(0, strip.numPixels(), 3):
-                strip.setPixelColor(i+q, 0)
+
+
+
+def fade_to_black(strips, showfunc):
+    for i in range(40):
+        for strip in strips:
+            strip.darken()
+        showfunc()
+
 
 colors = (Color(255, 0, 0), Color(0, 255, 0), Color(0, 0, 255))
 
@@ -132,7 +142,7 @@ def clear(strip: Adafruit_NeoPixel):
 
     strip.show()
 
-def clear_all(strips, showfunc):
+def clear_all(strips, show):
     for strip in strips:
         for i in range(strip.numPixels()):
             strip.setPixelColor(i, Color(0, 0, 0))
@@ -184,6 +194,11 @@ class ExpanderStrip:
         """
         self.pixels[n] = color
 
+    def darken(self, factor=0.9):
+        for i in range(len(self.pixels)):
+            color = self.pixels[i]
+            self.pixels[i] = Color(int(color.r * factor), int(color.g * factor), int(color.b * factor), int(color.w * factor))
+
     def write_pixels(self):
         pixeldata = bytearray()
         for pixel in self.pixels:
@@ -201,21 +216,29 @@ if __name__ == '__main__':
     print(ser.name)
 
     pex = PixelExpander(ser)
-    strip1 = ExpanderStrip(pex, 0, 150)
-    strip2 = ExpanderStrip(pex, 1, 150)
     hoops = [ExpanderStrip(pex, chan, 150) for chan in range(16)]
 
-    for i in range(3):
-        hoops[i].setPixelColor(i, wheel(i))
-        hoops[i].write_pixels()
-    pex.draw()
-    print(len(hoops))
+    # for i in range(3):
+    #     hoops[i].setPixelColor(i, wheel(i))
+    #     hoops[i].write_pixels()
+    # pex.draw()
+    # print(len(hoops))
     #rainbow_cycle_strips([strip1, strip2])
 
     # while True: 
-    #     pex.write()
+    #     for strip in hoops:
+    #         strip.darken()
+    #         strip.write_pixels()
+    #     pex.draw()
     #     time.sleep(3.6 / 1000.0)
-    #     break
+
+    def show():
+        rings[0].show()
+        for strip in hoops:
+            strip.write_pixels()
+        pex.draw()
+
+
 
     # Create NeoPixel object with appropriate configuration.
     strip = Adafruit_NeoPixel(LED_COUNT, LED_PIN, LED_FREQ_HZ, LED_DMA, LED_INVERT, LED_BRIGHTNESS, LED_CHANNEL)
@@ -242,34 +265,40 @@ if __name__ == '__main__':
         # for i, ring in enumerate(rings):
         #     ring.render(colors[i % len(colors)])
         # strip.show()
-        clear(strip)
+        # clear(strip)
         #time.sleep(20)
 
         print ('Press Ctrl-C to quit.')
         if not args.clear:
             print('Use "-c" argument to clear LEDs on exit')
 
-        def show():
-            rings[0].show()
-            for strip in hoops:
-                strip.write_pixels()
-            pex.draw()
+        allstrips = rings+hoops
 
-        clear(strip)
+        clear_all(allstrips, show)
         while True:
+            print('Fireflies')
+            firefly_strips(allstrips, show)
+            print('fade')
+            fade_to_black(allstrips, show)
+            clear_all(allstrips, show)
+
             print('Rainbow (rings)')
-            rainbow_strips(rings + hoops, showfunc = show)
-            #colorWipe(rings[1], wheel(1))
-            #print ('Rainbow (strip)')
-            #rainbow(strip)
-            #print ('Rainbow cycle (strip)')
-            #rainbowCycle(strip)
+            rainbow_strips(allstrips, show)
+            print('fade')
+            fade_to_black(allstrips, show)
+            clear_all(allstrips, show)
+
+            print('Darken')
+            darken_circle_strips(allstrips, show)
+            print('fade')
+            fade_to_black(allstrips, show)
+            clear_all(allstrips, show)
+
             print('Rainbow cycle (rings)')
-            rainbow_cycle_strips(rings + hoops, showfunc = show)
-            # print ('Rainbow theater.')
-            # theaterChaseRainbow(strip)
+            rainbow_cycle_strips(allstrips, show)
+            print('fade')
+            fade_to_black(allstrips, show)
+            clear_all(allstrips, show)
 
     except KeyboardInterrupt:
-        #if args.clear:
         clear_all(rings+hoops, show)
-        #colorWipe(strip, Color(0,0,0), 10)
